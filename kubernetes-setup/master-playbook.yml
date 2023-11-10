@@ -1,0 +1,179 @@
+---
+- hosts: all
+  become: true
+  tasks:
+  - name: Install packages that allow apt to be used over HTTPS
+    apt:
+      name: "{{ packages }}"
+      state: present
+      update_cache: yes
+    vars:
+      packages:
+      - apt-transport-https
+      - ca-certificates
+      - curl
+      - gnupg-agent
+      - software-properties-common
+
+  - name: Add an apt signing key for Docker
+    apt_key:
+      url: https://download.docker.com/linux/ubuntu/gpg
+      state: present
+
+  - name: Add apt repository for stable version
+    apt_repository:
+      repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu focal stable
+      state: present
+
+  - name: Install docker and its dependecies
+    apt: 
+      name: "{{ packages }}"
+      state: present
+      update_cache: yes
+    vars:
+      packages:
+      - docker-ce 
+      - docker-ce-cli 
+      - containerd.io
+    notify:
+      - docker status
+
+## Kubernetes is deprecating Docker as a container runtime after v1.20 and so Kubernetes latest versions have not written supported CRI API's for docker
+  - name: Check if the file exists
+    ansible.builtin.stat:
+      path: /etc/containerd/config.toml
+    register: containerd_config
+    ignore_errors: true
+
+  - name: Ensure the line is present in the file
+    lineinfile:
+      path: /etc/containerd/config.toml
+      regexp: '^disabled_plugins = \["cri"\]'
+      line: 'disabled_plugins = [""]'
+      backrefs: yes
+    when: containerd_config.stat.exists
+
+  - name: Restart containerd.io
+    service:
+      name: containerd
+      daemon_reload: yes
+      state: restarted
+##
+
+  - name: Add vagrant user to docker group
+    user:
+      name: vagrant
+      group: docker
+
+  - name: Remove swapfile from /etc/fstab
+    mount:
+      name: "{{ item }}"
+      fstype: swap
+      state: absent
+    with_items:
+      - swap
+      - none
+
+  - name: Disable swap
+    command: swapoff -a
+    when: ansible_swaptotal_mb > 0
+
+  - name: Add an apt signing key for Kubernetes
+    apt_key:
+      url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+      state: present
+
+  - name: Adding apt repository for Kubernetes
+    apt_repository:
+      repo: deb https://apt.kubernetes.io/ kubernetes-xenial main
+      state: present
+      filename: kubernetes.list
+
+  - name: Install Kubernetes binaries
+    apt: 
+      name: "{{ packages }}"
+      state: present
+      update_cache: yes
+    vars:
+      packages:
+        - kubelet 
+        - kubeadm 
+        - kubectl
+
+  - name: Configure node ip
+    lineinfile:
+      path: /etc/default/kubelet
+      line: KUBELET_EXTRA_ARGS=--node-ip={{ node_ip }}
+      create: yes
+
+  - name: Restart kubelet
+    service:
+      name: kubelet
+      daemon_reload: yes
+      state: restarted
+
+  - name: Initialize the Kubernetes cluster using kubeadm
+    command: kubeadm init --apiserver-advertise-address="192.168.50.10" --apiserver-cert-extra-sans="192.168.50.10"  --node-name kubem00 --pod-network-cidr=192.168.0.0/16
+    ignore_errors: true
+
+  # - name: Setup kubeconfig for vagrant user
+  #   command: "{{ item }}"
+  #   with_items:
+  #    - mkdir -p /home/vagrant/.kube
+  #    - cp -i /etc/kubernetes/admin.conf /home/vagrant/.kube/config
+  #    - chown vagrant:vagrant /home/vagrant/.kube/config
+
+  - name: Create .kube dir for vagrant user
+    file:
+      path: /home/vagrant/.kube
+      state: directory
+      owner: vagrant
+      group: vagrant
+      mode: '0755'
+
+  - name: Copy admin.conf to vagrant user's kubeconfig
+    copy:
+      src: /etc/kubernetes/admin.conf
+      dest: /home/vagrant/.kube/config
+      owner: vagrant
+      group: vagrant
+      mode: '0644'
+      remote_src: true
+
+  - name: Change ownership of kubeconfig file to vagrant user
+    file:
+      path: /home/vagrant/.kube/config
+      owner: vagrant
+      group: vagrant
+
+  # - name: Install calico pod network
+  #   become: false
+  #   command: kubectl create -f https://docs.projectcalico.org/v3.4/getting-started/kubernetes/installation/hosted/calico.yaml
+
+  - name: Install tigera calico operator
+    become: false
+    command: kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.26.3/manifests/tigera-operator.yaml
+    ignore_errors: true
+    
+  - name: Install calico pod network
+    become: false
+    command: kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.26.3/manifests/custom-resources.yaml
+    ignore_errors: true
+
+  - name: Generate join command
+    command: kubeadm token create --print-join-command
+    register: join_command
+
+  - name: Copy join command to local file
+    ansible.builtin.copy:
+      content: "{{ join_command.stdout_lines[0] }}"
+      dest: /tmp/join-command
+
+  - name: Copy join command to local file
+    ansible.builtin.fetch:
+      src: "/tmp/join-command"
+      dest: ./.cluster
+
+  handlers:
+    - name: docker status
+      service: name=docker state=started

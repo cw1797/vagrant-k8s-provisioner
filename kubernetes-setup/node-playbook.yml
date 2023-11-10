@@ -1,0 +1,129 @@
+---
+- hosts: all
+  become: true
+  tasks:
+  - name: Install packages that allow apt to be used over HTTPS
+    apt:
+      name: "{{ packages }}"
+      state: present
+      update_cache: yes
+    vars:
+      packages:
+      - apt-transport-https
+      - ca-certificates
+      - curl
+      - gnupg-agent
+      - software-properties-common
+
+  - name: Add an apt signing key for Docker
+    apt_key:
+      url: https://download.docker.com/linux/ubuntu/gpg
+      state: present
+
+  - name: Add apt repository for stable version
+    apt_repository:
+      repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu focal stable
+      state: present
+
+  - name: Install docker and its dependecies
+    apt: 
+      name: "{{ packages }}"
+      state: present
+      update_cache: yes
+    vars:
+      packages:
+      - docker-ce 
+      - docker-ce-cli 
+      - containerd.io
+    notify:
+      - docker status
+
+## Kubernetes is deprecating Docker as a container runtime after v1.20 and so Kubernetes latest versions have not written supported CRI API's for docker
+  - name: Check if the file exists
+    ansible.builtin.stat:
+      path: /etc/containerd/config.toml
+    register: containerd_config
+    ignore_errors: true
+
+  - name: Ensure the line is present in the file
+    lineinfile:
+      path: /etc/containerd/config.toml
+      regexp: '^disabled_plugins = \["cri"\]'
+      line: 'disabled_plugins = [""]'
+      backrefs: yes
+    when: containerd_config.stat.exists
+
+  - name: Restart containerd.io
+    service:
+      name: containerd
+      daemon_reload: yes
+      state: restarted
+##
+
+  - name: Add vagrant user to docker group
+    user:
+      name: vagrant
+      group: docker
+
+  - name: Remove swapfile from /etc/fstab
+    mount:
+      name: "{{ item }}"
+      fstype: swap
+      state: absent
+    with_items:
+      - swap
+      - none
+
+  - name: Disable swap
+    command: swapoff -a
+    when: ansible_swaptotal_mb > 0
+
+  - name: Add an apt signing key for Kubernetes
+    apt_key:
+      url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+      state: present
+
+  - name: Adding apt repository for Kubernetes
+    apt_repository:
+      repo: deb https://apt.kubernetes.io/ kubernetes-xenial main
+      state: present
+      filename: kubernetes.list
+
+  - name: Install Kubernetes binaries
+    apt: 
+      name: "{{ packages }}"
+      state: present
+      update_cache: yes
+    vars:
+      packages:
+        - kubelet 
+        - kubeadm 
+        - kubectl
+
+  - name: Configure node ip
+    lineinfile:
+      path: /etc/default/kubelet
+      line: KUBELET_EXTRA_ARGS=--node-ip={{ node_ip }}
+      create: yes
+
+  - name: Restart kubelet
+    service:
+      name: kubelet
+      daemon_reload: yes
+      state: restarted
+
+  - name: Copy the join command to server location
+    copy:
+      src: .cluster/kubem00/tmp/join-command
+      dest: /tmp/join-command.sh
+      mode: 0777
+    
+  #   src=join-command dest=/tmp/join-command.sh mode=0777
+
+  - name: Join the node to cluster
+    command: sh /tmp/join-command.sh
+    ignore_errors: true
+
+  handlers:
+    - name: docker status
+      service: name=docker state=started
