@@ -2,13 +2,13 @@
 - hosts: all
   become: true
   tasks:
+
   - name: Install packages that allow apt to be used over HTTPS
     apt:
-      name: "{{ packages }}"
+      name: "{{ item }}"
       state: present
       update_cache: yes
-    vars:
-      packages:
+    loop:
       - apt-transport-https
       - ca-certificates
       - curl
@@ -27,18 +27,17 @@
 
   - name: Install docker and its dependecies
     apt: 
-      name: "{{ packages }}"
+      name: "{{ item }}"
       state: present
       update_cache: yes
-    vars:
-      packages:
-      - docker-ce 
-      - docker-ce-cli 
-      - containerd.io
+    loop:
+      - docker-ce=5:24.0.7-1~ubuntu.20.04~focal
+      - docker-ce-cli=5:24.0.7-1~ubuntu.20.04~focal
+      - containerd.io=1.6.24-1
     notify:
       - docker status
 
-## Kubernetes is deprecating Docker as a container runtime after v1.20 and so Kubernetes latest versions have not written supported CRI API's for docker
+  ## Kubernetes is deprecating Docker as a container runtime after v1.20 and so Kubernetes latest versions have not written supported CRI API's for docker
   - name: Check if the file exists
     ansible.builtin.stat:
       path: /etc/containerd/config.toml
@@ -58,7 +57,7 @@
       name: containerd
       daemon_reload: yes
       state: restarted
-##
+  ##
 
   - name: Add vagrant user to docker group
     user:
@@ -70,7 +69,7 @@
       name: "{{ item }}"
       fstype: swap
       state: absent
-    with_items:
+    loop:
       - swap
       - none
 
@@ -91,14 +90,13 @@
 
   - name: Install Kubernetes binaries
     apt: 
-      name: "{{ packages }}"
+      name: "{{ item }}"
       state: present
       update_cache: yes
-    vars:
-      packages:
-        - kubelet 
-        - kubeadm 
-        - kubectl
+    loop:
+      - kubelet=1.28.2-00
+      - kubeadm=1.28.2-00
+      - kubectl=1.28.2-00
 
   - name: Configure node ip
     lineinfile:
@@ -173,6 +171,46 @@
     ansible.builtin.fetch:
       src: "/tmp/join-command"
       dest: ./.cluster
+
+##include argocd deployment
+
+  - name: Install pip3
+    apt: 
+      name: python3-pip
+      state: present
+    #   update_cache: no
+    # become: true
+
+  - name: Install bottle python package on version 0.11
+    ansible.builtin.pip:
+      name: "{{ item }}"
+    loop:
+      - PyYAML
+      - openshift
+      - ansible
+    # become: true
+    
+  - name: Create ArgoCD namespace
+    kubernetes.core.k8s:
+      kind: namespace
+      name: argocd
+      state: present
+    become: false
+
+  - name: Download metrics-server manifest to the cluster.
+    ansible.builtin.get_url:
+      url: https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+      dest: ~/argocd_install.yaml
+      mode: '0664'
+    become: false
+
+  - name: Apply metrics-server manifest to the cluster.
+    kubernetes.core.k8s:
+      src: ~/argocd_install.yaml
+      apply: true
+      namespace: argocd
+      state: present
+    become: false
 
   handlers:
     - name: docker status

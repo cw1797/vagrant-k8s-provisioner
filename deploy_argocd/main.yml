@@ -1,0 +1,36 @@
+---
+- hosts: kubem00
+  tasks:
+    - name: Install pip3
+      apt: 
+        name: python3-pip
+        state: present
+        update_cache: yes
+      become: true
+
+    - name: Install bottle python package on version 0.11
+      ansible.builtin.pip:
+        name: "{{ item }}"
+      loop:
+        - PyYAML
+        - openshift
+        - ansible
+      become: true
+      
+    - name: Create ArgoCD namespace
+      kubernetes.core.k8s:
+        kind: namespace
+        name: argocd
+        state: present
+
+    - name: Download metrics-server manifest to the cluster.
+      ansible.builtin.get_url:
+        url: https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+        dest: ~/argocd_install.yaml
+        mode: '0664'
+
+    - name: Apply metrics-server manifest to the cluster.
+      kubernetes.core.k8s:
+        src: ~/argocd_install.yaml
+        namespace: argocd
+        state: present

@@ -4,11 +4,10 @@
   tasks:
   - name: Install packages that allow apt to be used over HTTPS
     apt:
-      name: "{{ packages }}"
+      name: "{{ item }}"
       state: present
       update_cache: yes
-    vars:
-      packages:
+    loop:
       - apt-transport-https
       - ca-certificates
       - curl
@@ -27,18 +26,17 @@
 
   - name: Install docker and its dependecies
     apt: 
-      name: "{{ packages }}"
+      name: "{{ item }}"
       state: present
       update_cache: yes
-    vars:
-      packages:
-      - docker-ce 
-      - docker-ce-cli 
-      - containerd.io
+    loop:
+      - docker-ce=5:24.0.7-1~ubuntu.20.04~focal
+      - docker-ce-cli=5:24.0.7-1~ubuntu.20.04~focal
+      - containerd.io=1.6.24-1
     notify:
       - docker status
 
-## Kubernetes is deprecating Docker as a container runtime after v1.20 and so Kubernetes latest versions have not written supported CRI API's for docker
+  ## Kubernetes is deprecating Docker as a container runtime after v1.20 and so Kubernetes latest versions have not written supported CRI API's for docker
   - name: Check if the file exists
     ansible.builtin.stat:
       path: /etc/containerd/config.toml
@@ -58,7 +56,7 @@
       name: containerd
       daemon_reload: yes
       state: restarted
-##
+  ##
 
   - name: Add vagrant user to docker group
     user:
@@ -70,7 +68,7 @@
       name: "{{ item }}"
       fstype: swap
       state: absent
-    with_items:
+    loop:
       - swap
       - none
 
@@ -91,14 +89,13 @@
 
   - name: Install Kubernetes binaries
     apt: 
-      name: "{{ packages }}"
+      name: "{{ item }}"
       state: present
       update_cache: yes
-    vars:
-      packages:
-        - kubelet 
-        - kubeadm 
-        - kubectl
+    loop:
+        - kubelet=1.28.2-00
+        - kubeadm=1.28.2-00
+        - kubectl=1.28.2-00
 
   - name: Configure node ip
     lineinfile:
