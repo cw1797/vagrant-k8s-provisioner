@@ -34,16 +34,14 @@
       - docker-ce=5:24.0.7-1~ubuntu.20.04~focal
       - docker-ce-cli=5:24.0.7-1~ubuntu.20.04~focal
       - containerd.io=1.6.24-1
-    notify:
-      - docker status
 
-  ## Kubernetes is deprecating Docker as a container runtime after v1.20 and so Kubernetes latest versions have not written supported CRI API's for docker
   - name: Check if the file exists
     ansible.builtin.stat:
       path: /etc/containerd/config.toml
     register: containerd_config
     ignore_errors: true
 
+  #Workaround - Kubernetes latest versions have not written supported CRI API's for docker
   - name: Ensure the line is present in the file
     lineinfile:
       path: /etc/containerd/config.toml
@@ -57,7 +55,6 @@
       name: containerd
       daemon_reload: yes
       state: restarted
-  ##
 
   - name: Add vagrant user to docker group
     user:
@@ -88,7 +85,7 @@
       state: present
       filename: kubernetes.list
 
-  - name: Install Kubernetes binaries
+  - name: Install Kubernetes packages
     apt: 
       name: "{{ item }}"
       state: present
@@ -114,13 +111,6 @@
     command: kubeadm init --apiserver-advertise-address="192.168.50.10" --apiserver-cert-extra-sans="192.168.50.10"  --node-name kubem00 --pod-network-cidr=192.168.0.0/16
     ignore_errors: true
 
-  # - name: Setup kubeconfig for vagrant user
-  #   command: "{{ item }}"
-  #   with_items:
-  #    - mkdir -p /home/vagrant/.kube
-  #    - cp -i /etc/kubernetes/admin.conf /home/vagrant/.kube/config
-  #    - chown vagrant:vagrant /home/vagrant/.kube/config
-
   - name: Create .kube dir for vagrant user
     file:
       path: /home/vagrant/.kube
@@ -144,10 +134,6 @@
       owner: vagrant
       group: vagrant
 
-  # - name: Install calico pod network
-  #   become: false
-  #   command: kubectl create -f https://docs.projectcalico.org/v3.4/getting-started/kubernetes/installation/hosted/calico.yaml
-
   - name: Install tigera calico operator
     become: false
     command: kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.26.3/manifests/tigera-operator.yaml
@@ -162,24 +148,22 @@
     command: kubeadm token create --print-join-command
     register: join_command
 
-  - name: Copy join command to local file
+  - name: Save join command to temp directory
     ansible.builtin.copy:
       content: "{{ join_command.stdout_lines[0] }}"
       dest: /tmp/join-command
 
-  - name: Copy join command to local file
+  - name: Copy join command to local machine
     ansible.builtin.fetch:
       src: "/tmp/join-command"
       dest: ./.cluster
 
-##include argocd deployment
+  ##ARGOCD Deployment
 
   - name: Install pip3
     apt: 
       name: python3-pip
       state: present
-    #   update_cache: no
-    # become: true
 
   - name: Install bottle python package on version 0.11
     ansible.builtin.pip:
@@ -188,7 +172,6 @@
       - PyYAML
       - openshift
       - ansible
-    # become: true
     
   - name: Create ArgoCD namespace
     kubernetes.core.k8s:
@@ -197,21 +180,17 @@
       state: present
     become: false
 
-  - name: Download metrics-server manifest to the cluster.
+  - name: Download ArgoCD deployment manifest
     ansible.builtin.get_url:
       url: https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
       dest: ~/argocd_install.yaml
       mode: '0664'
     become: false
 
-  - name: Apply metrics-server manifest to the cluster.
+  - name: Apply ArgoCD deployment manifest
     kubernetes.core.k8s:
       src: ~/argocd_install.yaml
       apply: true
       namespace: argocd
       state: present
     become: false
-
-  handlers:
-    - name: docker status
-      service: name=docker state=started

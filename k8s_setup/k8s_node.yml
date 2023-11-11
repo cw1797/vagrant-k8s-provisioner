@@ -2,6 +2,7 @@
 - hosts: all
   become: true
   tasks:
+
   - name: Install packages that allow apt to be used over HTTPS
     apt:
       name: "{{ item }}"
@@ -33,17 +34,15 @@
       - docker-ce=5:24.0.7-1~ubuntu.20.04~focal
       - docker-ce-cli=5:24.0.7-1~ubuntu.20.04~focal
       - containerd.io=1.6.24-1
-    notify:
-      - docker status
 
-  ## Kubernetes is deprecating Docker as a container runtime after v1.20 and so Kubernetes latest versions have not written supported CRI API's for docker
   - name: Check if the file exists
     ansible.builtin.stat:
       path: /etc/containerd/config.toml
     register: containerd_config
     ignore_errors: true
 
-  - name: Ensure the line is present in the file
+  #Workaround - Kubernetes latest versions have not written supported CRI API's for docker
+  - name: Enables CRI plugin
     lineinfile:
       path: /etc/containerd/config.toml
       regexp: '^disabled_plugins = \["cri"\]'
@@ -56,7 +55,6 @@
       name: containerd
       daemon_reload: yes
       state: restarted
-  ##
 
   - name: Add vagrant user to docker group
     user:
@@ -87,7 +85,7 @@
       state: present
       filename: kubernetes.list
 
-  - name: Install Kubernetes binaries
+  - name: Install Kubernetes packages
     apt: 
       name: "{{ item }}"
       state: present
@@ -114,13 +112,7 @@
       src: .cluster/kubem00/tmp/join-command
       dest: /tmp/join-command.sh
       mode: 0777
-    
-  #   src=join-command dest=/tmp/join-command.sh mode=0777
 
   - name: Join the node to cluster
     command: sh /tmp/join-command.sh
     ignore_errors: true
-
-  handlers:
-    - name: docker status
-      service: name=docker state=started
